@@ -1,0 +1,32 @@
+# Python / Virtual Environment
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# 가상 환경 파일들 (만약 프로젝트 루트에 직접 있다면)
+bin/
+Include/
+Lib/
+Scripts/
+pyvenv.cfg
+
+# 환경 변수 파일 (보안상 민감한 정보 포함 가능)
+.env
+
+# Flask 인스턴스 폴더 (개발/배포 환경별 설정 저장)
+instance/ # 프로젝트에 instance/ 폴더가 있다면 추가.
+
+# 운영 체제 관련 파일 (macOS, Windows 등)
+.DS_Store
+Thumbs.db
+
+# IDE 관련 파일 (Visual Studio Code 등)
+.vscode/
+
+# 로그 파일
+*.log
+*.tmp
+
+# 'test.editor import TextClip' 이 파일이 코드의 일부가 아니라 임시 파일이라면 추가.
+test.editor import TextClip
