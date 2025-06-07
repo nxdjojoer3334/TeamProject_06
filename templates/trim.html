@@ -43,6 +43,16 @@
         <input type="hidden" name="filename" value="{{ filename }}" />
         <input type="hidden" id="start_input" name="start_time" value="0" />
         <input type="hidden" id="end_input" name="end_time" value="0" />
+
+        <!-- 배경음악 선택 추가 -->
+        <label for="bgm">배경음악 선택:</label>
+        <select name="bgm_id" id="bgm" required>
+            {% for bgm in bgm_list %}
+                <option value="{{ bgm.id }}">{{ bgm.title }}</option>
+            {% endfor %}
+        </select>
+        <br /><br />
+
         <button type="submit">이 구간으로 자르기</button>
     </form>
 

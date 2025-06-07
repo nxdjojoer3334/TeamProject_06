@@ -1,0 +1,390 @@
+body {
+    font-family: Arial, sans-serif;
+    background-color: #f4f4f4;
+    color: #333;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    justify-content: center;
+    align-items: flex-start;
+    min-height: 100vh;
+}
+
+.container {
+    background-color: #fff;
+    padding: 30px;
+    border-radius: 8px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.1);
+    width: 100%;
+    max-width: 900px;
+    box-sizing: border-box;
+}
+
+h1 {
+    text-align: center;
+    color: #0056b3;
+    margin-bottom: 25px;
+}
+
+h2, h3 {
+    color: #0056b3;
+    border-bottom: 1px solid #eee;
+    padding-bottom: 10px;
+    margin-top: 30px;
+    margin-bottom: 20px;
+}
+
+.tabs {
+    display: flex;
+    justify-content: center;
+    margin-bottom: 20px;
+    border-bottom: 2px solid #ddd;
+}
+
+.tab-button {
+    background-color: #f0f0f0;
+    border: none;
+    padding: 12px 20px;
+    cursor: pointer;
+    font-size: 16px;
+    transition: background-color 0.3s ease;
+    border-radius: 5px 5px 0 0;
+    margin: 0 2px;
+    color: #555;
+}
+
+.tab-button.active {
+    background-color: #007bff;
+    color: white;
+    border-bottom: 2px solid #007bff;
+}
+
+.tab-button:hover:not(.active) {
+    background-color: #e2e2e2;
+}
+
+.tab-content {
+    display: none;
+    padding-top: 20px;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* Form Elements */
+input[type="file"],
+input[type="text"],
+input[type="number"],
+input[type="range"],
+input[type="color"],
+select,
+button {
+    display: block;
+    width: calc(100% - 20px); /* Adjust for padding/border */
+    padding: 10px;
+    margin-bottom: 15px;
+    border: 1px solid #ccc;
+    border-radius: 4px;
+    font-size: 16px;
+    box-sizing: border-box; /* Include padding and border in the element's total width and height */
+}
+
+input[type="range"] {
+    -webkit-appearance: none; /* 웹킷 브라우저 (Chrome, Safari 등) */
+    appearance: none; /* 표준 속성 */
+    height: 8px;
+    background: #ddd;
+    outline: none;
+    opacity: 0.7;
+    transition: opacity .2s;
+    border-radius: 5px;
+}
+
+input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    appearance: none; /* 표준 속성 */
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #007bff;
+    cursor: pointer;
+}
+
+/* Firefox 호환성을 위한 추가 코드 (필요한 경우) */
+input[type="range"]::-moz-range-thumb {
+    width: 20px;
+    height: 20px;
+    border-radius: 50%;
+    background: #007bff;
+    cursor: pointer;
+}
+
+
+button {
+    background-color: #007bff;
+    color: white;
+    border: none;
+    cursor: pointer;
+    transition: background-color 0.3s ease;
+    margin-top: 10px;
+}
+
+button:hover {
+    background-color: #0056b3;
+}
+
+.message {
+    margin-top: 10px;
+    padding: 10px;
+    border-radius: 4px;
+    font-weight: bold;
+    text-align: center;
+}
+
+.message.success {
+    background-color: #d4edda;
+    color: #155724;
+    border-color: #c3e6cb;
+}
+
+.message.error {
+    background-color: #f8d7da;
+    color: #721c24;
+    border-color: #f5c6cb;
+}
+
+/* Video Preview */
+.video-preview-section {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+#videoPlayer {
+    width: 100%;
+    max-width: 700px;
+    height: auto;
+    background-color: #000;
+    border-radius: 8px;
+}
+
+.video-info {
+    margin-top: 10px;
+    font-size: 14px;
+    color: #666;
+}
+
+.video-select-section {
+    margin-top: 20px;
+    padding: 15px;
+    background-color: #f9f9f9;
+    border-radius: 8px;
+    border: 1px solid #eee;
+}
+
+/* Edit Options */
+.edit-options label {
+    display: inline-block;
+    width: auto;
+    margin-right: 10px;
+    margin-bottom: 5px;
+    font-weight: bold;
+    color: #555;
+}
+
+.edit-options input[type="number"],
+.edit-options input[type="text"] {
+    width: calc(50% - 15px); /* Half width for side-by-side inputs */
+    display: inline-block;
+    margin-right: 10px;
+}
+
+.edit-options button {
+    width: 100%;
+}
+
+.volume-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 15px;
+    padding: 10px 0;
+    border-top: 1px solid #eee;
+    border-bottom: 1px solid #eee;
+}
+.volume-controls label {
+    flex: 1 1 120px; /* grow, shrink, base width */
+    margin-right: 10px;
+    text-align: right;
+}
+.volume-controls input[type="range"] {
+    flex: 2 1 150px;
+    margin-right: 10px;
+    width: auto; /* override default 100% */
+}
+.volume-controls span {
+    flex-shrink: 0;
+    width: 30px;
+    text-align: center;
+}
+
+
+/* Subtitle specific styles */
+#subtitle-input-container {
+    margin-bottom: 15px;
+    border: 1px solid #ddd;
+    padding: 15px;
+    border-radius: 5px;
+    background-color: #f0f0f0;
+}
+
+.subtitle-entry {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 10px;
+}
+
+.subtitle-entry input[type="text"] {
+    flex-grow: 3; /* text input takes more space */
+    margin-bottom: 0;
+}
+
+.subtitle-entry input[type="number"] {
+    flex-grow: 1; /* start/end time take less space */
+    margin-bottom: 0;
+}
+
+.subtitle-entry button {
+    flex-shrink: 0; /* delete button does not shrink */
+    width: auto; /* override default 100% */
+    padding: 8px 12px;
+    margin-top: 0;
+    background-color: #dc3545; /* Red for delete */
+}
+.subtitle-entry button:hover {
+    background-color: #c82333;
+}
+
+.subtitle-font-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+    margin-top: 20px;
+    padding: 15px;
+    background-color: #f9f9f9;
+    border-radius: 8px;
+    border: 1px solid #eee;
+}
+
+.subtitle-font-options label {
+    flex-basis: 80px; /* Fixed width for labels */
+    text-align: right;
+    margin-right: 5px;
+}
+
+.subtitle-font-options select,
+.subtitle-font-options input[type="number"],
+.subtitle-font-options input[type="color"],
+.subtitle-font-options input[type="text"],
+.subtitle-font-options input[type="range"] {
+    flex-basis: calc(50% - 90px); /* Adjust width to fit */
+    width: auto; /* Override general 100% width */
+    margin-bottom: 0;
+}
+
+.subtitle-font-options input[type="color"] {
+    padding: 5px; /* Adjust padding for color picker */
+    height: 40px;
+}
+.subtitle-font-options input[type="text"] {
+    width: calc(100% - 90px); /* Make x,y, box_fill_color input full width */
+}
+.subtitle-font-options input[type="range"] {
+    flex-basis: calc(100% - 90px); /* Make range full width */
+}
+
+
+.final-link {
+    text-align: center;
+    margin-top: 30px;
+}
+
+.final-link a {
+    background-color: #28a745;
+    color: white;
+    padding: 12px 25px;
+    text-decoration: none;
+    border-radius: 5px;
+    transition: background-color 0.3s ease;
+}
+
+.final-link a:hover {
+    background-color: #218838;
+}
+
+/* BGM Tab Specifics */
+.bgm-download-section,
+.bgm-list-section {
+    margin-top: 20px;
+    padding: 15px;
+    background-color: #f9f9f9;
+    border-radius: 8px;
+    border: 1px solid #eee;
+}
+
+#downloadedBGMList {
+    list-style: none;
+    padding: 0;
+}
+
+#downloadedBGMList li {
+    background-color: #e9ecef;
+    margin-bottom: 8px;
+    padding: 10px 15px;
+    border-radius: 4px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 15px;
+}
+
+#downloadedBGMList li span {
+    font-weight: bold;
+    color: #333;
+}
+
+/* Responsive Design */
+@media (max-width: 768px) {
+    .container {
+        padding: 20px;
+    }
+
+    .edit-options input[type="number"],
+    .edit-options input[type="text"] {
+        width: 100%;
+        margin-right: 0;
+    }
+    .volume-controls label,
+    .volume-controls input[type="range"],
+    .volume-controls span {
+        flex-basis: 100%; /* Stack elements vertically */
+        text-align: left;
+        margin-right: 0;
+    }
+    .subtitle-entry {
+        flex-wrap: wrap; /* Wrap subtitle inputs for smaller screens */
+    }
+    .subtitle-entry input {
+        flex-basis: 100%;
+    }
+    .subtitle-entry button {
+        width: 100%;
+    }
+    .subtitle-font-options label,
+    .subtitle-font-options select,
+    .subtitle-font-options input {
+        flex-basis: 100%;
+        text-align: left;
+    }
+}
