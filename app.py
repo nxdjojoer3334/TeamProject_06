@@ -1,575 +1,360 @@
 import os
-import pymysql
-import boto3
 import uuid
-from yt_dlp import YoutubeDL
-from flask import Flask, request, jsonify, render_template, send_from_directory
-from dotenv import load_dotenv
 import subprocess
-from datetime import datetime
+from flask import Flask, request, jsonify, render_template
+from werkzeug.utils import secure_filename
+import boto3
+from dotenv import load_dotenv
+import requests
+import pymysql
+import yt_dlp
 
-# .env 파일 로드
 load_dotenv()
-
 app = Flask(__name__)
 
-# 환경 변수 설정
-DB_HOST = os.getenv('DB_HOST')
-DB_USER = os.getenv('DB_USER')
-DB_PASSWORD = os.getenv('DB_PASSWORD')
-DB_NAME = os.getenv('DB_NAME')
+UPLOAD_FOLDER = './uploads'
+OUTPUT_FOLDER = './outputs'
+FONT_TMP_PATH = './temp_fonts'
 
-AWS_ACCESS_KEY_ID = os.getenv('AWS_ACCESS_KEY_ID')
-AWS_SECRET_ACCESS_KEY = os.getenv('AWS_SECRET_ACCESS_KEY')
-AWS_REGION = os.getenv('AWS_REGION')
-S3_BUCKET_NAME = os.getenv('S3_BUCKET_NAME')
+os.makedirs(UPLOAD_FOLDER, exist_ok=True)
+os.makedirs(OUTPUT_FOLDER, exist_ok=True)
+os.makedirs(FONT_TMP_PATH, exist_ok=True)
 
-# S3 클라이언트 초기화
+def escape_text(text):
+    # ffmpeg drawtext용 텍스트 특수문자 이스케이프
+    return text.replace(":", "\\:").replace("'", "\\'").replace(",", "\\,")
+
+MAX_FILE_SIZE = 800 * 1024 * 1024  # 800MB 제한
+app.config['MAX_CONTENT_LENGTH'] = MAX_FILE_SIZE
+
+# AWS S3 클라이언트 초기화
 s3 = boto3.client(
     's3',
-    aws_access_key_id=AWS_ACCESS_KEY_ID,
-    aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
-    region_name=AWS_REGION
+    aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
+    aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+    region_name=os.getenv("S3_REGION")
 )
+BUCKET_NAME = os.getenv("S3_BUCKET_NAME")
 
-# 파일 업로드 경로 설정
-UPLOAD_FOLDER = 'uploads'
-TRIMMED_FOLDER = 'trimmed_videos'
-FINAL_FOLDER = 'final_videos'
-BGM_AUDIO_FOLDER = 'bgm_audios'
-FONT_CACHE_FOLDER = 'font_cache'
-
-# 필요한 디렉토리 생성
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-os.makedirs(TRIMMED_FOLDER, exist_ok=True)
-os.makedirs(FINAL_FOLDER, exist_ok=True)
-os.makedirs(BGM_AUDIO_FOLDER, exist_ok=True)
-os.makedirs(FONT_CACHE_FOLDER, exist_ok=True)
-
-# 폰트 파일을 S3에서 로컬로 다운로드 (자막 처리를 위해)
-# S3 버킷에 'fonts/' 경로에 폰트 파일들이 미리 업로드되어 있어야 합니다.
-def download_fonts_from_s3():
-    try:
-        response = s3.list_objects_v2(Bucket=S3_BUCKET_NAME, Prefix='fonts/')
-        if 'Contents' in response:
-            for obj in response['Contents']:
-                if not obj['Key'].endswith('/'): # 폴더가 아닌 파일만 다운로드
-                    font_key = obj['Key']
-                    font_filename = os.path.basename(font_key)
-                    local_font_path = os.path.join(FONT_CACHE_FOLDER, font_filename)
-                    if not os.path.exists(local_font_path):
-                        print(f"Downloading font: {font_key} to {local_font_path}")
-                        s3.download_file(S3_BUCKET_NAME, font_key, local_font_path)
-        print("Font download completed.")
-    except Exception as e:
-        print(f"Error downloading fonts from S3: {e}")
-
-# 애플리케이션 시작 시 폰트 다운로드
-with app.app_context():
-    download_fonts_from_s3()
-
-# DB 연결 함수
 def get_db_connection():
-    conn = pymysql.connect(
-        host=DB_HOST,
-        user=DB_USER,
-        password=DB_PASSWORD,
-        database=DB_NAME,
+    return pymysql.connect(
+        host=os.getenv("MYSQL_HOST"),
+        user=os.getenv("MYSQL_USER"),
+        password=os.getenv("MYSQL_PASSWORD"),
+        database="bgm_db",
+        charset='utf8mb4',
         cursorclass=pymysql.cursors.DictCursor
     )
-    return conn
-
-@app.route('/')
-def index():
-    return render_template('index.html')
-
-# 사용자가 업로드한 비디오 목록 가져오기 (DB에서)
-@app.route('/get_user_videos', methods=['GET'])
-def get_user_videos():
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            # 새로운 videos 테이블 스키마에 맞춰 컬럼 선택
-            sql = "SELECT id, original_filename, s3_url, duration, status, created_at FROM videos ORDER BY created_at DESC"
-            cursor.execute(sql)
-            videos = cursor.fetchall()
-        return jsonify(videos)
-    except Exception as e:
-        print(f"Error fetching user videos: {e}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        conn.close()
-
-# 사용 가능한 BGM 목록 가져오기 (DB에서)
-@app.route('/get_bgm_list', methods=['GET'])
-def get_bgm_list():
-    conn = get_db_connection()
-    try:
-        with conn.cursor() as cursor:
-            sql = "SELECT id, title, filename, s3_url, duration FROM bgm_audios ORDER BY title ASC"
-            cursor.execute(sql)
-            bgm_list = cursor.fetchall()
-        return jsonify(bgm_list)
-    except Exception as e:
-        print(f"Error fetching BGM list: {e}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        conn.close()
-
-# 사용 가능한 폰트 목록 가져오기 (로컬 캐시에서)
-@app.route('/get_available_fonts', methods=['GET'])
-def get_available_fonts():
-    try:
-        fonts = [f for f in os.listdir(FONT_CACHE_FOLDER) if f.lower().endswith(('.ttf', '.otf'))]
-        return jsonify(fonts)
-    except Exception as e:
-        print(f"Error getting available fonts: {e}")
-        return jsonify({'error': str(e)}), 500
-
-# 비디오 업로드
-@app.route('/upload_video', methods=['POST'])
-def upload_video():
-    if 'video' not in request.files:
-        return jsonify({'error': 'No video file provided'}), 400
-
-    video_file = request.files['video']
-    if video_file.filename == '':
-        return jsonify({'error': 'No selected file'}), 400
-
-    unique_filename = str(uuid.uuid4()) + os.path.splitext(video_file.filename)[1]
-    local_path = os.path.join(UPLOAD_FOLDER, unique_filename)
-    video_file.save(local_path)
-
-    try:
-        # 비디오 길이 측정 (ffprobe 사용)
-        cmd = [
-            'ffprobe',
-            '-v', 'error',
-            '-show_entries', 'format=duration',
-            '-of', 'default=noprint_wrappers=1:nokey=1',
-            local_path
-        ]
-        result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-        duration = float(result.stdout.strip())
-
-        # S3에 업로드
-        s3_key = f"{UPLOAD_FOLDER}/{unique_filename}"
-        s3.upload_file(local_path, S3_BUCKET_NAME, s3_key)
-        s3_url = f"https://{S3_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/{s3_key}"
-
-        # DB에 정보 저장
-        conn = get_db_connection()
-        try:
-            with conn.cursor() as cursor:
-                # 새로운 videos 테이블 스키마에 맞춰 INSERT
-                sql = "INSERT INTO videos (original_filename, s3_key, s3_url, duration, status, created_at) VALUES (%s, %s, %s, %s, %s, %s)"
-                cursor.execute(sql, (video_file.filename, s3_key, s3_url, duration, 'uploaded', datetime.now()))
-                conn.commit()
-                video_id = cursor.lastrowid
-        finally:
-            conn.close()
-
-        # 로컬 파일 삭제
-        os.remove(local_path)
-
-        return jsonify({
-            'message': 'Video uploaded successfully',
-            'video_id': video_id,
-            's3_url': s3_url,
-            'original_filename': video_file.filename,
-            'duration': duration
-        }), 200
-
-    except subprocess.CalledProcessError as e:
-        print(f"FFprobe error: {e.stderr}")
-        os.remove(local_path)
-        return jsonify({'error': 'Failed to process video (ffprobe error)'}), 500
-    except Exception as e:
-        print(f"Upload error: {e}")
-        if os.path.exists(local_path):
-            os.remove(local_path)
-        return jsonify({'error': str(e)}), 500
-
-# 비디오 트리밍
-@app.route('/trim_video', methods=['POST'])
-def trim_video():
-    data = request.json
-    video_s3_url = data.get('video_s3_url')
-    video_id = data.get('video_id')
-    start_time = data.get('start_time')
-    end_time = data.get('end_time')
-
-    if not all([video_s3_url, video_id is not None, start_time is not None, end_time is not None]):
-        return jsonify({'error': 'Missing trimming parameters'}), 400
-
-    unique_id = str(uuid.uuid4())
-    input_local_path = os.path.join(UPLOAD_FOLDER, f"temp_input_{unique_id}.mp4")
-    output_local_path = os.path.join(TRIMMED_FOLDER, f"trimmed_video_{unique_id}.mp4")
-
-    try:
-        # S3에서 원본 비디오 다운로드
-        s3.download_file(S3_BUCKET_NAME, video_s3_url.split('/')[-2] + '/' + video_s3_url.split('/')[-1], input_local_path)
-
-        # FFmpeg로 트리밍
-        cmd = [
-            'ffmpeg',
-            '-i', input_local_path,
-            '-ss', str(start_time),
-            '-to', str(end_time),
-            '-c', 'copy',
-            output_local_path
-        ]
-        subprocess.run(cmd, check=True, capture_output=True)
-
-        # 트리밍된 비디오를 S3에 업로드
-        new_s3_key = f"{TRIMMED_FOLDER}/{os.path.basename(output_local_path)}"
-        s3.upload_file(output_local_path, S3_BUCKET_NAME, new_s3_key)
-        new_s3_url = f"https://{S3_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/{new_s3_key}"
-
-        # DB 업데이트
-        conn = get_db_connection()
-        try:
-            with conn.cursor() as cursor:
-                sql = "UPDATE videos SET s3_url = %s, status = %s WHERE id = %s"
-                cursor.execute(sql, (new_s3_url, 'trimmed', video_id))
-                conn.commit()
-        finally:
-            conn.close()
-
-        # 로컬 파일 삭제
-        os.remove(input_local_path)
-        os.remove(output_local_path)
-
-        return jsonify({
-            'message': 'Video trimmed successfully',
-            'video_id': video_id,
-            'new_s3_url': new_s3_url,
-            'status': 'trimmed'
-        }), 200
-
-    except subprocess.CalledProcessError as e:
-        print(f"FFmpeg error during trimming: {e.stderr}")
-        return jsonify({'error': 'Failed to trim video (ffmpeg error)'}), 500
-    except Exception as e:
-        print(f"Trimming error: {e}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if os.path.exists(input_local_path):
-            os.remove(input_local_path)
-        if os.path.exists(output_local_path):
-            os.remove(output_local_path)
-
-
-# BGM 다운로드 (YouTube에서)
-# app.py 상단에 `from yt_dlp import YoutubeDL` 추가
-# 또는 `subprocess`로 `yt-dlp` 명령을 직접 실행
-from yt_dlp import YoutubeDL
-
-@app.route('/download_bgm_from_youtube', methods=['POST'])
-def download_bgm_from_youtube():
-    data = request.json
-    youtube_url = data.get('youtube_url')
-
-    if not youtube_url:
-        return jsonify({'error': 'No YouTube URL provided'}), 400
-
+def download_youtube_as_mp3(youtube_url, output_path):
     ydl_opts = {
         'format': 'bestaudio/best',
+        'outtmpl': output_path,
+        'quiet': True,
+        'no_warnings': True,
         'postprocessors': [{
             'key': 'FFmpegExtractAudio',
             'preferredcodec': 'mp3',
             'preferredquality': '192',
         }],
-        'outtmpl': os.path.join(BGM_AUDIO_FOLDER, '%(title)s.%(ext)s'),
-        'restrictfilenames': True, # 안전한 파일명
     }
+    with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+        ydl.download([youtube_url])
 
+def download_file(url, output_path):
+    resp = requests.get(url)
+    if resp.status_code != 200:
+        raise Exception(f"Failed to download file from {url}")
+    with open(output_path, 'wb') as f:
+        f.write(resp.content)
+
+@app.route('/')
+def index():
+    return render_template('index.html')
+
+@app.route('/upload', methods=['POST'])
+def upload_file():
+    if 'video' not in request.files:
+        return jsonify({'error': 'No file part'}), 400
+
+    file = request.files['video']
+    if file.filename == '':
+        return jsonify({'error': 'No selected file'}), 400
+
+    filename = secure_filename(file.filename)
+    extension = os.path.splitext(filename)[1]
+    s3_key = f"uploads/{uuid.uuid4()}{extension}"
+
+    # 임시 폴더에 저장
+    temp_path = os.path.join("temp", s3_key.replace("/", "_"))
+    os.makedirs("temp", exist_ok=True)
+    file.save(temp_path)
+
+    # 영상 길이 추출 (ffprobe)
     try:
-        with YoutubeDL(ydl_opts) as ydl:
-            info_dict = ydl.extract_info(youtube_url, download=True)
-            # 다운로드된 파일의 실제 경로와 제목 찾기
-            # info_dict에서 실제 파일명 경로를 얻는 방식은 yt-dlp 버전에 따라 다를 수 있습니다.
-            # 가장 안전한 방법은 info_dict에서 title과 id를 조합하는 것입니다.
-            # 예: actual_filename = os.path.join(BGM_AUDIO_FOLDER, ydl.prepare_filename(info_dict))
-            # 또는 info_dict.get('requested_downloads')[0].get('filepath') 등을 사용
-            # 여기서는 title을 filename으로 간주합니다.
-            
-            audio_title = info_dict.get('title')
-            audio_filename = f"{audio_title}.mp3" # yt-dlp 기본 mp3 확장자
-            local_audio_path = os.path.join(BGM_AUDIO_FOLDER, audio_filename)
-            
-            # 파일이 실제로 다운로드되었는지 확인
-            if not os.path.exists(local_audio_path):
-                # 다른 파일명 패턴을 시도하거나 에러 처리
-                potential_files = [f for f in os.listdir(BGM_AUDIO_FOLDER) if audio_title in f and f.endswith('.mp3')]
-                if potential_files:
-                    local_audio_path = os.path.join(BGM_AUDIO_FOLDER, potential_files[0])
-                else:
-                    raise Exception("Downloaded audio file not found locally.")
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+             '-of', 'default=noprint_wrappers=1:nokey=1', temp_path],
+            stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True, text=True
+        )
+        duration = float(result.stdout.strip())
+    except Exception:
+        return jsonify({'error': 'Could not get duration'}), 500
 
-            # S3에 업로드
-            s3_key = f"{BGM_AUDIO_FOLDER}/{os.path.basename(local_audio_path)}"
-            s3.upload_file(local_audio_path, S3_BUCKET_NAME, s3_key)
-            s3_url = f"https://{S3_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/{s3_key}"
-
-            # 오디오 길이 측정 (ffprobe 사용)
-            cmd = [
-                'ffprobe',
-                '-v', 'error',
-                '-show_entries', 'format=duration',
-                '-of', 'default=noprint_wrappers=1:nokey=1',
-                local_audio_path
-            ]
-            result = subprocess.run(cmd, capture_output=True, text=True, check=True)
-            duration = float(result.stdout.strip())
-
-            # DB에 정보 저장
-            conn = get_db_connection()
-            try:
-                with conn.cursor() as cursor:
-                    sql = "INSERT INTO bgm_audios (title, filename, s3_key, s3_url, youtube_url, duration, uploaded_at) VALUES (%s, %s, %s, %s, %s, %s, %s)"
-                    cursor.execute(sql, (audio_title, os.path.basename(local_audio_path), s3_key, s3_url, youtube_url, duration, datetime.now()))
-                    conn.commit()
-                    bgm_id = cursor.lastrowid
-            finally:
-                conn.close()
-
-            # 로컬 파일 삭제
-            os.remove(local_audio_path)
-
-            return jsonify({
-                'message': 'BGM downloaded and uploaded successfully',
-                'bgm_id': bgm_id,
-                'title': audio_title,
-                'filename': os.path.basename(local_audio_path),
-                's3_url': s3_url,
-                'duration': duration
-            }), 200
-
-    except Exception as e:
-        print(f"BGM download/upload error: {e}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        # 혹시 모를 로컬 임시 파일 정리
-        if 'local_audio_path' in locals() and os.path.exists(local_audio_path):
-            os.remove(local_audio_path)
-
-
-# BGM 추가 (오디오 믹싱)
-@app.route('/add_bgm_to_video', methods=['POST'])
-def add_bgm_to_video():
-    data = request.json
-    video_s3_url = data.get('video_s3_url')
-    video_id = data.get('video_id')
-    bgm_s3_url = data.get('bgm_s3_url')
-    bgm_volume = data.get('bgm_volume', 0.5) # BGM 볼륨 기본값 0.5
-    video_volume = data.get('video_volume', 0.5) # 원본 비디오 오디오 볼륨 기본값 0.5
-
-    if not all([video_s3_url, video_id is not None, bgm_s3_url]):
-        return jsonify({'error': 'Missing BGM adding parameters'}), 400
-
-    unique_id = str(uuid.uuid4())
-    video_input_local_path = os.path.join(UPLOAD_FOLDER, f"temp_video_{unique_id}.mp4")
-    bgm_input_local_path = os.path.join(BGM_AUDIO_FOLDER, f"temp_bgm_{unique_id}.mp3")
-    output_local_path = os.path.join(FINAL_FOLDER, f"video_with_bgm_{unique_id}.mp4")
-
-    try:
-        # S3에서 비디오와 BGM 다운로드
-        s3.download_file(S3_BUCKET_NAME, video_s3_url.split('amazonaws.com/')[-1], video_input_local_path)
-        s3.download_file(S3_BUCKET_NAME, bgm_s3_url.split('amazonaws.com/')[-1], bgm_input_local_path)
-
-        # 비디오 길이 측정 (FFmpeg 오디오 믹싱 시 BGM 길이를 맞추기 위함)
-        cmd_duration = [
-            'ffprobe',
-            '-v', 'error',
-            '-show_entries', 'format=duration',
-            '-of', 'default=noprint_wrappers=1:nokey=1',
-            video_input_local_path
-        ]
-        video_duration_result = subprocess.run(cmd_duration, capture_output=True, text=True, check=True)
-        video_duration = float(video_duration_result.stdout.strip())
-
-        # FFmpeg로 오디오 믹싱
-        # -filter_complex: 비디오 오디오 볼륨 조절 및 BGM 믹싱
-        # [0:a] 비디오의 오디오 스트림, [1:a] BGM의 오디오 스트림
-        # amix=inputs=2:duration=first:dropout_transition=0: Normalize=0
-        # duration=first는 비디오 길이에 맞춰 믹싱
-        # anullsrc은 비디오에 오디오가 없는 경우를 대비하여 빈 오디오 스트림을 생성
-        # -shortest: 비디오 길이가 BGM보다 짧을 경우, 비디오 길이에 맞춰 BGM을 자름
-        cmd = [
-            'ffmpeg',
-            '-i', video_input_local_path,
-            '-i', bgm_input_local_path,
-            '-filter_complex',
-            f"[0:a]volume={video_volume}[a0];[1:a]volume={bgm_volume}[a1];[a0][a1]amix=inputs=2:duration=first:dropout_transition=0[aout]",
-            '-map', '0:v', # 비디오 스트림은 원본에서 가져옴
-            '-map', '[aout]', # 믹싱된 오디오 스트림 사용
-            '-c:v', 'copy', # 비디오는 재인코딩 없이 복사 (빠른 처리)
-            '-c:a', 'aac',  # 오디오 코덱은 AAC로 인코딩 (호환성)
-            '-b:a', '192k', # 오디오 비트레이트 설정
-            '-shortest', # 비디오 길이에 맞춰 BGM 자르기
-            output_local_path
-        ]
-        subprocess.run(cmd, check=True, capture_output=True)
-
-        # 결과 비디오를 S3에 업로드
-        new_s3_key = f"{FINAL_FOLDER}/{os.path.basename(output_local_path)}"
-        s3.upload_file(output_local_path, S3_BUCKET_NAME, new_s3_key)
-        new_s3_url = f"https://{S3_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/{new_s3_key}"
-
-        # DB 업데이트
-        conn = get_db_connection()
+    # 썸네일 생성 (5초 간격)
+    thumbs = []
+    thumb_dir = os.path.join("static", "thumbnails")
+    os.makedirs(thumb_dir, exist_ok=True)
+    interval = 5
+    for t in range(0, int(duration), interval):
+        thumb_filename = f"{uuid.uuid4()}_t{t}.jpg"
+        thumb_path = os.path.join(thumb_dir, thumb_filename)
         try:
-            with conn.cursor() as cursor:
-                sql = "UPDATE videos SET s3_url = %s, status = %s WHERE id = %s"
-                cursor.execute(sql, (new_s3_url, 'bgm_added', video_id))
-                conn.commit()
-        finally:
-            conn.close()
+            subprocess.run([
+                'ffmpeg', '-ss', str(t), '-i', temp_path,
+                '-frames:v', '1', '-q:v', '2', thumb_path
+            ], check=True)
+            thumbs.append({'url': f"/static/thumbnails/{thumb_filename}", 'time': t})
+        except subprocess.CalledProcessError:
+            continue
 
-        # 로컬 파일 삭제
-        os.remove(video_input_local_path)
-        os.remove(bgm_input_local_path)
-        os.remove(output_local_path)
+    # S3 업로드
+    s3.upload_file(temp_path, BUCKET_NAME, s3_key)
+    s3_url = f"https://{BUCKET_NAME}.s3.{os.getenv('S3_REGION')}.amazonaws.com/{s3_key}"
 
-        return jsonify({
-            'message': 'BGM added to video successfully',
-            'video_id': video_id,
-            'new_s3_url': new_s3_url,
-            'status': 'bgm_added'
-        }), 200
+    os.remove(temp_path)
 
-    except subprocess.CalledProcessError as e:
-        print(f"FFmpeg error during BGM adding: {e.stderr}")
-        return jsonify({'error': 'Failed to add BGM to video (ffmpeg error)'}), 500
-    except Exception as e:
-        print(f"BGM adding error: {e}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if os.path.exists(video_input_local_path):
-            os.remove(video_input_local_path)
-        if os.path.exists(bgm_input_local_path):
-            os.remove(bgm_input_local_path)
-        if os.path.exists(output_local_path):
-            os.remove(output_local_path)
+    return jsonify({'s3_url': s3_url, 'thumbnails': thumbs}), 200
 
-
-# 자막 추가
-@app.route('/add_subtitles_to_video', methods=['POST'])
-def add_subtitles_to_video():
+@app.route('/trim', methods=['POST'])
+def trim_video():
     data = request.json
-    video_s3_url = data.get('video_s3_url')
-    video_id = data.get('video_id')
-    subtitles_data = data.get('subtitles') # [{'text': 'Hello', 'start': 0, 'end': 3, 'font': 'Arial.ttf', 'size': 24, 'color': '#FFFFFF', 'x': 50, 'y': 50, 'box_fill_color': '#000000@0.5'}]
-    font_name = data.get('font_name', 'NanumGothic.ttf') # 기본 폰트
-    font_size = data.get('font_size', 30)
-    font_color = data.get('font_color', 'white')
-    pos_x = data.get('pos_x', '(w-text_w)/2') # 기본 가운데 정렬
-    pos_y = data.get('pos_y', 'h-th-20') # 기본 하단 정렬
+    s3_url = data.get('s3_url')
+    start = data.get('start')
+    end = data.get('end')
 
-    if not all([video_s3_url, video_id is not None, subtitles_data]):
-        return jsonify({'error': 'Missing subtitle parameters'}), 400
+    if not s3_url or start is None or end is None:
+        return jsonify({'error': 'Missing parameters'}), 400
 
-    unique_id = str(uuid.uuid4())
-    input_local_path = os.path.join(UPLOAD_FOLDER, f"temp_video_sub_{unique_id}.mp4")
-    output_local_path = os.path.join(FINAL_FOLDER, f"video_with_subtitles_{unique_id}.mp4")
+    input_path = f"temp/{uuid.uuid4()}.mp4"
+    output_filename = f"{uuid.uuid4()}_trimmed.mp4"
+    output_path = os.path.join("static", "trimmed", output_filename)
+    os.makedirs("static/trimmed", exist_ok=True)
 
+    # s3_url에서 영상 다운로드
+    with open(input_path, 'wb') as f:
+        f.write(requests.get(s3_url).content)
+
+    duration = float(end) - float(start)
     try:
-        # S3에서 비디오 다운로드
-        s3.download_file(S3_BUCKET_NAME, video_s3_url.split('amazonaws.com/')[-1], input_local_path)
+        subprocess.run([
+            'ffmpeg', '-ss', str(start), '-i', input_path,
+            '-t', str(duration), '-c', 'copy', output_path
+        ], check=True)
+    except subprocess.CalledProcessError:
+        return jsonify({'error': 'ffmpeg trimming failed'}), 500
+    finally:
+        os.remove(input_path)
 
-        # 폰트 파일 경로 확인 (로컬 캐시에서)
-        font_path = os.path.join(FONT_CACHE_FOLDER, font_name)
-        if not os.path.exists(font_path):
-            return jsonify({'error': f"Font file not found: {font_name}. Please upload it to S3 fonts folder."}), 400
+    trimmed_url = f"/static/trimmed/{output_filename}"
+    return jsonify({'trimmed_url': trimmed_url}), 200
 
-        # FFmpeg drawtext 필터 옵션 생성
-        drawtext_filters = []
-        for sub in subtitles_data:
-            text = sub.get('text', '').replace("'", "\\'").replace(':', '\\:') # FFmpeg 필터에서 사용할 수 있도록 특수문자 이스케이프
-            start_time = sub.get('start', 0)
-            end_time = sub.get('end', 99999) # 무제한
-            
-            # 개별 자막마다 스타일 적용 (전달받은 데이터가 더 우선)
-            current_font_name = sub.get('font_name', font_name)
-            current_font_path = os.path.join(FONT_CACHE_FOLDER, current_font_name)
-            if not os.path.exists(current_font_path):
-                 print(f"Warning: Specific font {current_font_name} not found. Using default {font_name}.")
-                 current_font_path = font_path
+@app.route('/bgm_list', methods=['GET'])
+def get_bgm_list():
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    # moods 테이블이 있다고 가정, mood_id를 mood 이름으로 변환
+    cursor.execute("SELECT b.title, b.url, m.name as mood FROM bgm_list b JOIN moods m ON b.mood_id = m.id")
+    rows = cursor.fetchall()
+    conn.close()
 
-            current_font_size = sub.get('font_size', font_size)
-            current_font_color = sub.get('font_color', font_color)
-            current_pos_x = sub.get('pos_x', pos_x)
-            current_pos_y = sub.get('pos_y', pos_y)
-            box_fill_color = sub.get('box_fill_color', None) # 배경 상자 색상 (예: '#000000@0.5')
-            
-            filter_str = (
-                f"fontfile='{current_font_path}':"
-                f"text='{text}':"
-                f"x={current_pos_x}:y={current_pos_y}:"
-                f"fontsize={current_font_size}:fontcolor={current_font_color}:"
-                f"enable='between(t,{start_time},{end_time})'"
+    result = {}
+    for row in rows:
+        mood = row['mood']
+        if mood not in result:
+            result[mood] = []
+        result[mood].append({'title': row['title'], 'url': row['url']})
+
+    return jsonify(result)
+
+@app.route('/process', methods=['POST'])
+def trim_and_overlay():
+    data = request.json
+    s3_url = data.get('s3_url')
+    start = data.get('start')
+    end = data.get('end')
+    bgm_url = data.get('bgm_url')  # YouTube URL
+    subtitle = data.get('subtitle', '')
+    volume_original = float(data.get('volume_original', 1.0))
+    volume_bgm = float(data.get('volume_bgm', 0.3))
+
+    if not s3_url or start is None or end is None or not bgm_url:
+        return jsonify({'error': 'Missing parameters'}), 400
+
+    os.makedirs("temp", exist_ok=True)
+    os.makedirs("result", exist_ok=True)
+
+    temp_input = f"temp/{uuid.uuid4()}.mp4"
+    temp_trimmed = f"temp/{uuid.uuid4()}_trimmed.mp4"
+    final_output = f"result/{uuid.uuid4()}_final.mp4"
+
+    # BGM 파일 경로 설정 (yt_dlp는 확장자 없이 지정해야 함)
+    temp_bgm_base = f"temp/{uuid.uuid4()}"
+    temp_bgm = f"{temp_bgm_base}.mp3"
+
+    # 파일 경로 설정
+    temp_input = f"temp/{uuid.uuid4()}.mp4"
+    temp_trimmed = f"temp/{uuid.uuid4()}_trimmed.mp4"
+    final_output = f"result/{uuid.uuid4()}_final.mp4"
+
+    # 원본 영상 다운로드
+    try:
+        with open(temp_input, 'wb') as f:
+            f.write(requests.get(s3_url).content)
+    except Exception:
+        return jsonify({'error': '원본 영상 다운로드 실패'}), 500
+
+    # BGM 다운로드 (YouTube → mp3)
+    try:
+        ydl_opts = {
+            'format': 'bestaudio/best',
+            'outtmpl': temp_bgm_base,
+            'postprocessors': [{
+                'key': 'FFmpegExtractAudio',
+                'preferredcodec': 'mp3',
+                'preferredquality': '192',
+            }],
+            'quiet': True,
+        }
+        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+            ydl.download([bgm_url])
+        if not os.path.exists(temp_bgm):
+            return jsonify({'error': 'BGM 다운로드 실패: 파일이 생성되지 않았습니다'}), 500
+    except Exception as e:
+        return jsonify({'error': f'BGM 다운로드 실패: {str(e)}'}), 500
+    
+    # 트리밍
+    duration = float(end) - float(start)
+    try:
+        subprocess.run([
+            'ffmpeg', '-ss', str(start), '-i', temp_input,
+            '-t', str(duration), '-c', 'copy', temp_trimmed
+        ], check=True)
+
+        vf_filter = ""
+        if subtitle:
+            vf_filter = (
+                f"drawtext=text='{subtitle}':"
+                f"fontcolor=white:fontsize=24:x=(w-text_w)/2:y=h-50:"
+                f"box=1:boxcolor=black@0.5"
             )
-            if box_fill_color:
-                filter_str += f":box=1:boxcolor={box_fill_color}:boxborderw=10" # boxborderw는 상자와 텍스트 사이의 여백
 
-            drawtext_filters.append(filter_str)
-        
-        # 모든 자막 필터를 하나의 필터 문자열로 결합 (콤마로 구분)
-        filter_complex_str = ",drawtext=".join(drawtext_filters)
-        if filter_complex_str:
-            filter_complex_str = f"drawtext={filter_complex_str}" # 첫 번째 drawtext는 앞에 붙음
-
-
-        # FFmpeg로 자막 추가
-        cmd = [
-            'ffmpeg',
-            '-i', input_local_path,
-            '-vf', filter_complex_str, # 비디오 필터 적용
-            '-c:a', 'copy', # 오디오는 재인코딩 없이 복사
-            output_local_path
+        ffmpeg_cmd = [
+            'ffmpeg', '-i', temp_trimmed, '-i', temp_bgm,
+            '-filter_complex',
+            f"[0:a]volume={volume_original}[a0];"
+            f"[1:a]volume={volume_bgm}[a1];"
+            f"[a0][a1]amix=inputs=2:duration=first:dropout_transition=2[a]",
+            '-map', '0:v', '-map', '[a]',
+            '-c:v', 'libx264', '-c:a', 'aac', '-shortest'
         ]
-        subprocess.run(cmd, check=True, capture_output=True)
+
+        if vf_filter:
+            ffmpeg_cmd.insert(-1, '-vf')
+            ffmpeg_cmd.insert(-1, vf_filter)
+
+        ffmpeg_cmd.append(final_output)
+
+        subprocess.run(ffmpeg_cmd, check=True)
+
+    except subprocess.CalledProcessError:
+        return jsonify({'error': 'ffmpeg 처리 실패'}), 500
+    finally:
+        # 모든 임시 파일 제거
+        for path in [temp_input, temp_bgm, temp_trimmed]:
+            if os.path.exists(path):
+                os.remove(path)
+
+    return jsonify({'video_url': f"/{final_output}"}), 200
+
+@app.route('/fonts_list', methods=['GET'])
+def fonts_list():
+    prefix = "font/"
+    response = s3.list_objects_v2(Bucket=BUCKET_NAME, Prefix=prefix)
+    print("S3 Response:", response)  # 확인용 로그
+
+    font_files = []
+    if 'Contents' in response:
+        for obj in response['Contents']:
+            key = obj['Key']
+            print("Found key:", key)  # 키 확인용 로그
+            if key == prefix:
+                continue
+            if key.lower().endswith(('.ttf', '.otf')):
+                url = f"https://{BUCKET_NAME}.s3.{os.getenv('S3_REGION')}.amazonaws.com/{key}"
+                filename = os.path.basename(key)
+                font_files.append({'name': filename, 'url': url})
+
+    print("Returned font files:", font_files)  # 반환 전 최종 확인
+    return jsonify(font_files)
 
 
-        # 결과 비디오를 S3에 업로드
-        new_s3_key = f"{FINAL_FOLDER}/{os.path.basename(output_local_path)}"
-        s3.upload_file(output_local_path, S3_BUCKET_NAME, new_s3_key)
-        new_s3_url = f"https://{S3_BUCKET_NAME}.s3.{AWS_REGION}.amazonaws.com/{new_s3_key}"
+@app.route("/add_subtitle", methods=["POST"])
+def add_subtitle():
+    try:
+        data = request.json
+        video_path = os.path.join(UPLOAD_FOLDER, data["video_filename"])
+        subtitles = data["subtitles"]  # [{"text": ..., "start": ..., "end": ...}, ...]
+        font_url = data["font_url"]
+        font_size = data.get("font_size", 48)
+        font_color = data.get("font_color", "white")
+        pos_x = data.get("pos_x", "(w-text_w)/2")
+        pos_y = data.get("pos_y", "h-100")
 
-        # DB 업데이트
-        conn = get_db_connection()
-        try:
-            with conn.cursor() as cursor:
-                sql = "UPDATE videos SET s3_url = %s, status = %s WHERE id = %s"
-                cursor.execute(sql, (new_s3_url, 'subtitled', video_id))
-                conn.commit()
-        finally:
-            conn.close()
+        font_filename = os.path.basename(font_url)
+        font_path = os.path.join(FONT_TMP_PATH, font_filename)
 
-        # 로컬 파일 삭제
-        os.remove(input_local_path)
-        os.remove(output_local_path)
+        if not os.path.exists(font_path):
+            res = requests.get(font_url)
+            if res.status_code != 200:
+                return jsonify({"error": "Font download failed"}), 400
+            with open(font_path, "wb") as f:
+                f.write(res.content)
+
+        # drawtext 필터 리스트 생성
+        drawtext_filters = []
+        for sub in subtitles:
+            text_escaped = escape_text(sub["text"])
+            start = float(sub.get("start", 0))
+            end = float(sub.get("end", 10**6))
+            dt_filter = (
+                f"drawtext=fontfile='{font_path}':"
+                f"text='{text_escaped}':"
+                f"fontcolor={font_color}:fontsize={font_size}:"
+                f"x={pos_x}:y={pos_y}:"
+                f"enable='between(t,{start},{end})'"
+            )
+            drawtext_filters.append(dt_filter)
+
+        vf_filter = ",".join(drawtext_filters)
+
+        output_path = os.path.join(OUTPUT_FOLDER, "output.mp4")
+
+        cmd = [
+            "ffmpeg", "-y", "-i", video_path,
+            "-vf", vf_filter,
+            "-codec:a", "copy",
+            output_path
+        ]
+
+        subprocess.run(cmd, check=True)
 
         return jsonify({
-            'message': 'Subtitles added to video successfully',
-            'video_id': video_id,
-            'new_s3_url': new_s3_url,
-            'status': 'subtitled'
-        }), 200
+            "message": "Subtitles added successfully",
+            "output_url": f"/outputs/output.mp4"
+        })
 
-    except subprocess.CalledProcessError as e:
-        print(f"FFmpeg error during subtitling: {e.stderr}")
-        return jsonify({'error': 'Failed to add subtitles to video (ffmpeg error)'}), 500
     except Exception as e:
-        print(f"Subtitle adding error: {e}")
-        return jsonify({'error': str(e)}), 500
-    finally:
-        if os.path.exists(input_local_path):
-            os.remove(input_local_path)
-        if os.path.exists(output_local_path):
-            os.remove(output_local_path)
-
-
+        return jsonify({"error": str(e)}), 500
+    
 if __name__ == '__main__':
-    app.run(debug=True, port=5000)
+    app.run(debug=True)

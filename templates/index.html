@@ -1,123 +1,427 @@
 <!DOCTYPE html>
-<html lang="ko">
+<html>
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>비디오 편집기</title>
-    <link rel="stylesheet" href="style.css">
+    <title>Video Upload with BGM, Subtitle & Font</title>
+    <style>
+        .thumbnail-container {
+            display: flex;
+            overflow-x: auto;
+            gap: 10px;
+            margin-top: 20px;
+        }
+        .thumbnail-container img {
+            width: 160px;
+            height: auto;
+            border: 1px solid #ccc;
+            cursor: pointer;
+        }
+        .accordion-item {
+            border: 1px solid #ccc;
+            margin-bottom: 5px;
+            border-radius: 4px;
+        }
+        .accordion-header {
+            background-color: #eee;
+            padding: 10px;
+            cursor: pointer;
+            user-select: none;
+            font-weight: bold;
+        }
+        .accordion-content {
+            display: none;
+            padding: 10px;
+        }
+        .font-sample {
+            font-size: 18px;
+            margin-top: 5px;
+            cursor: pointer;
+            border: 1px solid transparent;
+            padding: 4px;
+        }
+        .font-sample.selected {
+            border-color: blue;
+            background-color: #def;
+        }
+        #selectedBgmText {
+            font-weight: bold;
+            margin-top: 5px;
+            color: green;
+        }
+
+        /* BGM 버튼 선택 스타일 */
+        #bgmListContainer button {
+            margin: 2px 6px 6px 0;
+            padding: 6px 12px;
+            cursor: pointer;
+        }
+        #bgmListContainer button.selected {
+            background-color: #0066cc;
+            color: white;
+            border: none;
+        }
+    </style>
 </head>
 <body>
-    <div class="container">
-        <h1>나만의 비디오 편집기</h1>
+    <h1>Upload Video</h1>
+    <input type="file" id="videoInput" accept="video/*">
+    <button onclick="uploadVideo()">Upload</button>
 
-        <div class="tabs">
-            <button class="tab-button active" onclick="openTab(event, 'upload-tab')">비디오 업로드</button>
-            <button class="tab-button" onclick="openTab(event, 'edit-tab')">비디오 편집</button>
-            <button class="tab-button" onclick="openTab(event, 'bgm-tab')">BGM 관리</button>
-        </div>
+    <h2>Uploaded Video</h2>
+    <p id="resultText"></p>
+    <video id="videoPlayer" width="640" controls style="margin-top:20px;">
+        <source id="videoSource" src="" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
+    <div class="thumbnail-container" id="thumbnailContainer"></div>
 
-        <div id="upload-tab" class="tab-content active">
-            <h2>새 비디오 업로드</h2>
-            <input type="file" id="videoFileInput" accept="video/*">
-            <button onclick="uploadVideo()">업로드</button>
-            <div id="uploadMessage" class="message"></div>
-        </div>
+    <h2>Trim Video</h2>
+    <label>Start (초):</label>
+    <input type="number" id="startTime" value="0" step="0.1" min="0">
+    <label>End (초):</label>
+    <input type="number" id="endTime" value="10" step="0.1" min="1">
+    
+    <h2>Select BGM</h2>
+    <div id="bgmListContainer"></div>
+    <p id="selectedBgmText">Selected BGM: None</p>
+    <audio id="bgmPlayer" controls style="display:none; margin-top:10px;"></audio>
 
-        <div id="edit-tab" class="tab-content">
-            <h2>비디오 편집</h2>
-            <div class="video-preview-section">
-                <video id="videoPlayer" controls></video>
-                <div class="video-info">
-                    <p>현재 재생 시간: <span id="currentTime">00:00:00</span> / 총 길이: <span id="totalDuration">00:00:00</span></p>
-                </div>
-            </div>
+    <h2>Add Subtitle</h2>
+    <textarea id="subtitleInput" rows="3" cols="60" placeholder="Enter subtitle text"></textarea><br>
 
-            <div class="video-select-section">
-                <h3>편집할 비디오 선택</h3>
-                <select id="userVideosSelect" onchange="loadSelectedVideo()">
-                    <option value="">비디오를 선택해주세요</option>
-                </select>
-                <div id="videoSelectMessage" class="message"></div>
-            </div>
+    <h2>Select Font</h2>
+    <div id="fontAccordion"></div>
 
-            <div class="edit-options">
-                <h3>트리밍 (자르기)</h3>
-                <label for="trimStart">시작 시간 (초):</label>
-                <input type="number" id="trimStart" step="0.1" value="0">
-                <label for="trimEnd">종료 시간 (초):</label>
-                <input type="number" id="trimEnd" step="0.1">
-                <button onclick="trimVideo()">트리밍 적용</button>
-                <div id="trimMessage" class="message"></div>
+    <h2>Volume Control</h2>
+    <label>Original Audio Volume: <span id="volOrigVal">1.0</span></label>
+    <input type="range" id="volOrig" min="0" max="1" step="0.05" value="1.0">
+    <br>
+    <label>BGM Volume: <span id="volBgmVal">0.3</span></label>
+    <input type="range" id="volBgm" min="0" max="1" step="0.05" value="0.3">
 
-                <h3>BGM 추가</h3>
-                <select id="bgmSelect">
-                    <option value="">BGM을 선택해주세요</option>
-                </select>
-                <div class="volume-controls">
-                    <label for="bgmVolume">BGM 볼륨:</label>
-                    <input type="range" id="bgmVolume" min="0" max="1" step="0.1" value="0.5">
-                    <span id="bgmVolumeValue">0.5</span>
+    <br><br>
+    <button onclick="processVideo()">Trim & Overlay BGM & Subtitle</button>
 
-                    <label for="videoVolume">원본 비디오 볼륨:</label>
-                    <input type="range" id="videoVolume" min="0" max="1" step="0.1" value="0.5">
-                    <span id="videoVolumeValue">0.5</span>
-                </div>
-                <button onclick="addBGMToVideo()">BGM 적용</button>
-                <div id="bgmMessage" class="message"></div>
+    <h2>Processed Video</h2>
+    <video id="processedPlayer" width="640" controls style="margin-top:20px; display:none;">
+        <source id="processedSource" src="" type="video/mp4">
+        Your browser does not support the video tag.
+    </video>
 
-                <h3>자막 추가</h3>
-                <div id="subtitle-input-container">
-                    <div class="subtitle-entry">
-                        <input type="text" placeholder="자막 내용" class="subtitle-text">
-                        <input type="number" placeholder="시작(초)" step="0.1" class="subtitle-start">
-                        <input type="number" placeholder="종료(초)" step="0.1" class="subtitle-end">
-                        <button onclick="removeSubtitleInput(this)">삭제</button>
-                    </div>
-                </div>
-                <button onclick="addSubtitleInput()">+ 자막 추가</button>
+<script>
+let uploadedVideoUrl = "";
+let selectedBgmUrl = "";
+let selectedBgmTitle = "None";
+let selectedBgmButton = null;  // 선택된 BGM 버튼 참조
+let fonts = [];
+let selectedFontUrl = "";
+let selectedFontFamily = "";
 
-                <div class="subtitle-font-options">
-                    <label for="fontSelect">폰트:</label>
-                    <select id="fontSelect"></select>
-                    <label for="fontSize">크기:</label>
-                    <input type="number" id="fontSize" value="30" min="10" max="100">
-                    <label for="fontColor">색상:</label>
-                    <input type="color" id="fontColor" value="#FFFFFF">
-                    <label for="subPosX">X 위치:</label>
-                    <input type="text" id="subPosX" value="(w-text_w)/2">
-                    <label for="subPosY">Y 위치:</label>
-                    <input type="text" id="subPosY" value="h-th-20">
-                    <label for="subBoxColor">배경색:</label>
-                    <input type="color" id="subBoxColor" value="#000000">
-                    <label for="subBoxOpacity">배경투명도:</label>
-                    <input type="range" id="subBoxOpacity" min="0" max="1" step="0.1" value="0.5">
-                </div>
-                <button onclick="addSubtitlesToVideo()">자막 적용</button>
-                <div id="subtitleMessage" class="message"></div>
-            </div>
-            
-            <div id="finalVideoLink" class="final-link">
-                <a href="#" target="_blank" style="display: none;">최종 비디오 다운로드</a>
-            </div>
-        </div>
+// 업로드 함수
+async function uploadVideo() {
+    const videoInput = document.getElementById("videoInput");
+    if (videoInput.files.length === 0) {
+        alert("Please select a video file.");
+        return;
+    }
+    const formData = new FormData();
+    formData.append("video", videoInput.files[0]);
 
-        <div id="bgm-tab" class="tab-content">
-            <h2>BGM 관리</h2>
-            <div class="bgm-download-section">
-                <h3>YouTube BGM 다운로드</h3>
-                <input type="text" id="youtubeUrlInput" placeholder="YouTube URL 입력">
-                <button onclick="downloadBGMFromYouTube()">다운로드</button>
-                <div id="bgmDownloadMessage" class="message"></div>
-            </div>
-            
-            <div class="bgm-list-section">
-                <h3>다운로드된 BGM 목록</h3>
-                <ul id="downloadedBGMList">
-                    </ul>
-            </div>
-        </div>
-    </div>
+    try {
+        const res = await fetch("/upload", { method: "POST", body: formData });
+        if (!res.ok) throw new Error("Upload failed");
+        const data = await res.json();
+        uploadedVideoUrl = data.s3_url;
+        document.getElementById("resultText").innerText = `Uploaded to: ${uploadedVideoUrl}`;
+        document.getElementById("videoSource").src = uploadedVideoUrl;
+        document.getElementById("videoPlayer").load();
 
-    <script src="script.js"></script>
+        displayThumbnails(data.thumbnails);
+        await loadBgmList();
+        await loadFonts();
+    } catch(e) {
+        alert(e.message);
+        console.error(e);
+    }
+}
+
+// 썸네일 표시
+function displayThumbnails(thumbnails) {
+    const container = document.getElementById("thumbnailContainer");
+    container.innerHTML = "";
+    thumbnails.forEach(t => {
+        const img = document.createElement("img");
+        img.src = t.url;
+        img.title = `Thumbnail at ${t.time}s`;
+        img.onclick = () => {
+            document.getElementById("startTime").value = Math.max(0, t.time - 1).toFixed(1);
+            document.getElementById("endTime").value = (t.time + 2).toFixed(1);
+        };
+        container.appendChild(img);
+    });
+}
+
+// BGM 목록 로드 및 버튼 생성, 선택 시 토글 재생 및 버튼 스타일링
+async function loadBgmList() {
+    try {
+        const res = await fetch("/bgm_list");
+        if (!res.ok) throw new Error("Failed to load BGM list");
+        const data = await res.json();
+        const container = document.getElementById("bgmListContainer");
+        container.innerHTML = "";
+
+        selectedBgmUrl = "";
+        selectedBgmTitle = "None";
+        document.getElementById("selectedBgmText").innerText = `Selected BGM: None`;
+        document.getElementById("bgmPlayer").style.display = "none";
+        document.getElementById("bgmPlayer").pause();
+        document.getElementById("bgmPlayer").src = "";
+
+        selectedBgmButton = null;
+
+        for (const mood in data) {
+            const moodDiv = document.createElement("div");
+            moodDiv.innerHTML = `<h3>${mood}</h3>`;
+            data[mood].forEach(bgm => {
+                const btn = document.createElement("button");
+                btn.innerText = bgm.title;
+
+                btn.onclick = () => {
+                    // 같은 버튼 클릭하면 토글 재생/정지
+                    const audioPlayer = document.getElementById("bgmPlayer");
+                    if (selectedBgmButton === btn) {
+                        // 현재 재생 중이면 정지, 아니면 재생
+                        if (!audioPlayer.paused) {
+                            audioPlayer.pause();
+                        } else {
+                            audioPlayer.play();
+                        }
+                        return;
+                    }
+
+                    // 새로 선택된 버튼
+                    selectedBgmUrl = bgm.url;
+                    selectedBgmTitle = bgm.title;
+                    document.getElementById("selectedBgmText").innerText = `Selected BGM: ${bgm.title}`;
+
+                    // 이전 선택 버튼 스타일 초기화
+                    if (selectedBgmButton) {
+                        selectedBgmButton.classList.remove("selected");
+                    }
+                    btn.classList.add("selected");
+                    selectedBgmButton = btn;
+
+                    // 오디오 소스 설정 및 재생
+                    if (bgm.url.includes("http")) {
+                        audioPlayer.src = bgm.url;
+                        audioPlayer.style.display = "block";
+                        audioPlayer.load();
+                        audioPlayer.play();
+                    } else {
+                        audioPlayer.pause();
+                        audioPlayer.style.display = "none";
+                        audioPlayer.src = "";
+                    }
+                };
+
+                moodDiv.appendChild(btn);
+            });
+            container.appendChild(moodDiv);
+        }
+    } catch(e) {
+        console.error(e);
+    }
+}
+
+
+
+document.getElementById("volOrig").addEventListener("input", (e) => {
+    document.getElementById("volOrigVal").innerText = e.target.value;
+});
+document.getElementById("volBgm").addEventListener("input", (e) => {
+    document.getElementById("volBgmVal").innerText = e.target.value;
+});
+
+const videoPlayer = document.getElementById("videoPlayer");
+const endTimeInput = document.getElementById("endTime");
+const startTimeInput = document.getElementById("startTime");
+
+videoPlayer.onloadedmetadata = () => {
+    const duration = videoPlayer.duration;  // 영상 총 길이(초)
+    endTimeInput.max = duration.toFixed(2);
+
+    // endTime 값이 duration 보다 크면 조정
+    if (parseFloat(endTimeInput.value) > duration) {
+        endTimeInput.value = duration.toFixed(2);
+    }
+    // startTime 값이 duration 보다 크면 0으로 초기화
+    if (parseFloat(startTimeInput.value) > duration) {
+        startTimeInput.value = "0";
+    }
+};
+
+// startTime input 값 제한 (0 이상, endTime 미만)
+startTimeInput.addEventListener("input", e => {
+    let val = parseFloat(e.target.value);
+    if (isNaN(val) || val < 0) {
+        e.target.value = 0;
+        val = 0;
+    }
+    let max = parseFloat(endTimeInput.value);
+    if (val >= max) {
+        e.target.value = (max - 0.1).toFixed(2);
+    }
+});
+
+// endTime input 값 제한 (startTime 초과, 영상 길이 이하)
+endTimeInput.addEventListener("input", e => {
+    let val = parseFloat(e.target.value);
+    let min = parseFloat(startTimeInput.value);
+    let max = videoPlayer.duration || 99999;
+    if (isNaN(val) || val > max) {
+        e.target.value = max.toFixed(2);
+        val = max;
+    }
+    if (val <= min) {
+        e.target.value = (min + 0.1).toFixed(2);
+    }
+});
+
+// 자막 입력란에 입력시 미리보기 텍스트 동기화
+document.getElementById("subtitleInput").addEventListener("input", () => {
+    const previewSub = document.getElementById("subtitlePreview");
+    if (previewSub) {
+        previewSub.innerText = document.getElementById("subtitleInput").value || "Sample Subtitle Text";
+    }
+});
+
+// 자막 미리보기 박스 추가
+const subtitlePreviewBox = document.createElement("div");
+subtitlePreviewBox.id = "subtitlePreview";
+subtitlePreviewBox.style.border = "1px solid #ccc";
+subtitlePreviewBox.style.padding = "10px";
+subtitlePreviewBox.style.minHeight = "40px";
+subtitlePreviewBox.style.fontSize = "18px";
+subtitlePreviewBox.style.marginTop = "10px";
+subtitlePreviewBox.innerText = "Sample Subtitle Text";
+document.querySelector("h2:nth-of-type(4)").insertAdjacentElement("afterend", subtitlePreviewBox);
+
+// 서버에 처리 요청
+async function loadFonts() {
+  try {
+    const res = await fetch("/fonts_list");
+    if (!res.ok) throw new Error("Failed to load fonts");
+    const fonts = await res.json();
+
+    const accContainer = document.getElementById("fontAccordion");
+    accContainer.innerHTML = "";
+
+    // 기존에 생성된 동적 스타일 제거
+    document.querySelectorAll("style.font-style-generated").forEach(s => s.remove());
+
+    const sampleText = "Sample Subtitle Text";
+
+    fonts.forEach((font, idx) => {
+      const item = document.createElement("div");
+      item.className = "accordion-item";
+
+      const header = document.createElement("div");
+      header.className = "accordion-header";
+      header.innerText = font.name;
+      header.onclick = () => {
+        const content = item.querySelector(".accordion-content");
+        const isShown = content.style.display === "block";
+        // 모든 아코디언 내용 닫기
+        document.querySelectorAll(".accordion-content").forEach(c => c.style.display = "none");
+        content.style.display = isShown ? "none" : "block";
+      };
+
+      const content = document.createElement("div");
+      content.className = "accordion-content";
+      content.style.display = "none";
+
+      // 확장자에 따라 font-face format 지정
+      const ext = font.url.split('.').pop().toLowerCase();
+      const formatType = ext === "otf" ? "opentype" : "truetype";
+
+      const fontStyle = document.createElement("style");
+      fontStyle.className = "font-style-generated";
+      const fontFamilyName = `font_${idx}`;
+      fontStyle.textContent = `
+        @font-face {
+          font-family: '${fontFamilyName}';
+          src: url('${font.url}') format('${formatType}');
+          font-weight: normal;
+          font-style: normal;
+        }
+      `;
+      document.head.appendChild(fontStyle);
+
+      const sample = document.createElement("div");
+      sample.className = "font-sample";
+      sample.innerText = sampleText;
+      sample.style.fontFamily = fontFamilyName;
+      sample.style.cursor = "pointer";
+
+      sample.onclick = () => {
+        document.querySelectorAll(".font-sample").forEach(s => s.classList.remove("selected"));
+        sample.classList.add("selected");
+
+        window.selectedFontUrl = font.url;
+        window.selectedFontFamily = fontFamilyName;
+
+        const previewSub = document.getElementById("subtitlePreview");
+        if (previewSub) previewSub.style.fontFamily = fontFamilyName;
+      };
+
+      content.appendChild(sample);
+      item.appendChild(header);
+      item.appendChild(content);
+      accContainer.appendChild(item);
+    });
+  } catch (e) {
+    console.error("폰트 불러오기 실패:", e);
+  }
+}
+async function processVideo() {
+    if (!uploadedVideoUrl) {
+        alert("Please upload a video first.");
+        return;
+    }
+
+    const payload = {
+    s3_url: uploadedVideoUrl,
+    start: parseFloat(document.getElementById("startTime").value),
+    end: parseFloat(document.getElementById("endTime").value),
+    bgm_url: selectedBgmUrl,
+    subtitle: document.getElementById("subtitleInput").value,
+    volume_original: parseFloat(document.getElementById("volOrig").value),
+    volume_bgm: parseFloat(document.getElementById("volBgm").value)
+};
+
+console.log("Payload being sent:", payload); // 디버깅용
+
+try {
+    const res = await fetch("/process", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify(payload)
+    });
+
+    if (!res.ok) throw new Error("Video processing failed");
+
+    const data = await res.json();
+    document.getElementById("processedSource").src = data.video_url;
+    document.getElementById("processedPlayer").style.display = "block";
+    document.getElementById("processedPlayer").load();
+
+} catch (e) {
+    alert("Error processing video: " + e.message);
+    console.error(e);
+}
+}
+
+</script>
 </body>
 </html>
